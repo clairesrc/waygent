@@ -2,6 +2,8 @@ package capture
 
 import (
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -157,5 +159,158 @@ func TestParseWlrRandrOutput(t *testing.T) {
 				t.Errorf("parseWlrRandrOutput() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	t.Run("copies content verbatim", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src.txt")
+		dst := filepath.Join(dir, "dst.txt")
+		content := []byte("hello waygent\nline2\n")
+		if err := os.WriteFile(src, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := copyFile(src, dst); err != nil {
+			t.Fatalf("copyFile() error: %v", err)
+		}
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(content) {
+			t.Errorf("copyFile() = %q, want %q", got, content)
+		}
+	})
+
+	t.Run("source does not exist", func(t *testing.T) {
+		dir := t.TempDir()
+		dst := filepath.Join(dir, "dst.txt")
+		err := copyFile(filepath.Join(dir, "nonexistent"), dst)
+		if err == nil {
+			t.Error("copyFile() = nil, want error")
+		}
+	})
+
+	t.Run("destination directory does not exist", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src.txt")
+		if err := os.WriteFile(src, []byte("data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		err := copyFile(src, filepath.Join(dir, "nodir", "dst.txt"))
+		if err == nil {
+			t.Error("copyFile() = nil, want error")
+		}
+	})
+
+	t.Run("binary content", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src.bin")
+		dst := filepath.Join(dir, "dst.bin")
+		content := make([]byte, 4096)
+		for i := range content {
+			content[i] = byte(i % 256)
+		}
+		if err := os.WriteFile(src, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := copyFile(src, dst); err != nil {
+			t.Fatalf("copyFile() error: %v", err)
+		}
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(content) {
+			t.Errorf("copyFile() len = %d, want %d", len(got), len(content))
+		}
+	})
+}
+
+func TestParsePortalResponseLine(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		wantCode    int
+		wantURI     string
+		wantErr     bool
+		wantNoMatch bool
+	}{
+		{
+			name:     "successful response with uri",
+			line:     `/org/freedesktop/portal/desktop/request/1_42/waygent: org.freedesktop.portal.Request.Response(0, {'uri': <'file:///run/user/1000/doc/abc/Screenshot.png'>})`,
+			wantCode: 0,
+			wantURI:  "/run/user/1000/doc/abc/Screenshot.png",
+		},
+		{
+			name:     "cancelled response",
+			line:     `/org/freedesktop/portal/desktop/request/1_42/waygent: org.freedesktop.portal.Request.Response(1, {})`,
+			wantCode: 1,
+			wantErr:  true,
+		},
+		{
+			name:     "error response code 2",
+			line:     `/org/freedesktop/portal/desktop/request/1_42/waygent: org.freedesktop.portal.Request.Response(2, {})`,
+			wantCode: 2,
+			wantErr:  true,
+		},
+		{
+			name:        "not a response line",
+			line:        `/org/freedesktop/portal/desktop: some other signal`,
+			wantNoMatch: true,
+		},
+		{
+			name:     "success code but no uri",
+			line:     `/org/freedesktop/portal/desktop/request/1_42/waygent: org.freedesktop.portal.Request.Response(0, {})`,
+			wantCode: 0,
+			wantErr:  true,
+		},
+		{
+			name:     "uri with spaces in gdbus format",
+			line:     `/org/freedesktop/portal/desktop/request/1_42/t: org.freedesktop.portal.Request.Response(0, {'uri': <'file:///tmp/shot.png'>})`,
+			wantCode: 0,
+			wantURI:  "/tmp/shot.png",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, uri, matched, err := parsePortalResponseLine(tt.line)
+			if tt.wantNoMatch {
+				if matched {
+					t.Error("parsePortalResponseLine() matched, want no match")
+				}
+				return
+			}
+			if !matched {
+				t.Fatal("parsePortalResponseLine() did not match Response line")
+			}
+			if code != tt.wantCode {
+				t.Errorf("code = %d, want %d", code, tt.wantCode)
+			}
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if uri != tt.wantURI {
+				t.Errorf("uri = %q, want %q", uri, tt.wantURI)
+			}
+		})
+	}
+}
+
+func TestCaptureErrorMessageIncludesPortal(t *testing.T) {
+	err := Capture("/nonexistent/path/waygent-test-fail.png")
+	if err == nil {
+		t.Fatal("Capture() should fail without screenshot tools")
+	}
+	if !strings.Contains(err.Error(), "portal") {
+		t.Errorf("Capture() error = %q, want error mentioning 'portal'", err.Error())
 	}
 }
