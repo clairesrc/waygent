@@ -1,0 +1,13 @@
+/waygent
+/tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+result
+result-*
+.direnv/
